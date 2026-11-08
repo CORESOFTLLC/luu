@@ -14,7 +14,9 @@ return new class extends Migration
         Schema::table('transactions', function (Blueprint $table) {
             $table->string('transfer_identity', 64)->nullable()->after('bank_reference');
 
-            $table->index(['lottery_id', 'transfer_identity']);
+            // Not led by lottery_id: MySQL would otherwise drop the implicit index of the
+            // existing lottery_id foreign key in favour of this one.
+            $table->index(['transfer_identity', 'lottery_id']);
         });
     }
 
@@ -24,7 +26,7 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('transactions', function (Blueprint $table) {
-            $table->dropIndex(['lottery_id', 'transfer_identity']);
+            $table->dropIndex(['transfer_identity', 'lottery_id']);
             $table->dropColumn('transfer_identity');
         });
     }
