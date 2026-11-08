@@ -2,6 +2,8 @@ import { Form, Head, Link, router } from '@inertiajs/react';
 import { Upload, FileSpreadsheet, Trash2, Search, ChevronLeft, ChevronRight, Ban, RotateCcw, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useRef, useState, useCallback } from 'react';
 import Heading from '@/components/heading';
+import LotteryInvalidationDialog from '@/components/lottery-invalidation-dialog';
+import LotteryInvalidationPeriods from '@/components/lottery-invalidation-periods';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -19,6 +21,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
+import type { LotteryInvalidationData } from '@/types';
 
 type Lottery = {
     id: number;
@@ -65,12 +68,14 @@ type Props = {
         sort_by: string;
         sort_dir: 'asc' | 'desc';
     };
+    invalidation: LotteryInvalidationData;
 };
 
 export default function AdminLotteryImport({
     lottery,
     recentTransactions,
     filters,
+    invalidation,
 }: Props) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [searchValue, setSearchValue] = useState(filters.search ?? '');
@@ -183,6 +188,7 @@ export default function AdminLotteryImport({
             day: '2-digit',
             hour: '2-digit',
             minute: '2-digit',
+            timeZone: 'UTC',
         });
     };
 
@@ -191,24 +197,30 @@ export default function AdminLotteryImport({
             <Head title={`${lottery.name} - Хуулга импорт`} />
 
             <div className="space-y-6">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                     <Heading
                         variant="small"
                         title="Хаан банкны хуулга импорт"
                         description={lottery.name}
                     />
-                    <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => {
-                            if (confirm('Бүх гүйлгээ, сугалаа, банкны бүртгэлийг устгах уу?')) {
-                                router.delete(`/admin/lotteries/${lottery.id}/import`);
-                            }
-                        }}
-                    >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Бүгдийг арилгах
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <LotteryInvalidationDialog
+                            lotteryId={lottery.id}
+                            invalidation={invalidation}
+                        />
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => {
+                                if (confirm('Бүх гүйлгээ, сугалаа, банкны бүртгэлийг устгах уу? Хүчингүй болгосон хугацаа, түүх хэвээр үлдэнэ.')) {
+                                    router.delete(`/admin/lotteries/${lottery.id}/import`);
+                                }
+                            }}
+                        >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Бүгдийг арилгах
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Tab nav */}
@@ -307,6 +319,11 @@ export default function AdminLotteryImport({
                         </CardContent>
                     </Card>
                 </div>
+
+                <LotteryInvalidationPeriods
+                    lotteryId={lottery.id}
+                    invalidation={invalidation}
+                />
 
                 {/* Upload */}
                 <Card>
