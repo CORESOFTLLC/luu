@@ -7,6 +7,7 @@ use App\Models\Lottery;
 use App\Models\LotteryBank;
 use App\Models\LotteryTicket;
 use App\Models\Transaction;
+use App\Services\LotteryInvalidationService;
 use App\Services\StatementImportService;
 use Carbon\Carbon;
 use Illuminate\Contracts\View\View;
@@ -18,7 +19,9 @@ use Inertia\Response;
 
 class ImportController extends Controller
 {
-    public function show(Request $request, Lottery $lottery): Response
+    private const RESTORE_LOCKED_MESSAGE = 'Энэ гүйлгээ хүчингүй болгосон хугацаанд хамаарах тул сэргээх боломжгүй.';
+
+    public function show(Request $request, Lottery $lottery, LotteryInvalidationService $invalidations): Response
     {
         $lottery->loadCount('tickets');
 
@@ -74,6 +77,7 @@ class ImportController extends Controller
                 'sort_by' => $sortBy,
                 'sort_dir' => $sortDir,
             ],
+            'invalidation' => $invalidations->pageData($lottery, $request->user()),
         ]);
     }
 
@@ -253,20 +257,31 @@ class ImportController extends Controller
 
         $result = $service->import($lottery, $request->file('file'));
 
+        $message = "{$result['imported']} гүйлгээ импорт хийгдлээ. {$result['tickets_created']} сугалаа үүслээ. {$result['skipped']} алгаслаа.";
+        if ($result['invalidated'] > 0) {
+            $message .= " {$result['invalidated']} гүйлгээ өмнө хүчингүй болсон тул сугалаа үүсгээгүй.";
+        }
+
         Inertia::flash('toast', [
             'type' => 'success',
-            'message' => "{$result['imported']} гүйлгээ импорт хийгдлээ. {$result['tickets_created']} сугалаа үүслээ. {$result['skipped']} алгаслаа.",
+            'message' => $message,
         ]);
 
         return back();
     }
 
-    public function destroy(Lottery $lottery): RedirectResponse
+    public function destroy(Lottery $lottery, LotteryInvalidationService $invalidations): RedirectResponse
     {
-        $lottery->tickets()->delete();
-        $lottery->bankEntries()->delete();
-        $lottery->transactions()->delete();
-        $lottery->update(['sold_tickets' => 0]);
+        DB::transaction(function () use ($lottery, $invalidations) {
+            $lottery = $lottery->lockForWriting();
+
+            $invalidations->tombstoneExcludedTransfers($lottery);
+
+            $lottery->tickets()->delete();
+            $lottery->bankEntries()->delete();
+            $lottery->transactions()->delete();
+            $lottery->update(['sold_tickets' => 0]);
+        });
 
         Inertia::flash('toast', [
             'type' => 'success',
@@ -276,9 +291,38 @@ class ImportController extends Controller
         return back();
     }
 
-    public function toggleExclude(Lottery $lottery, LotteryBank $lotteryBank): RedirectResponse
+    public function toggleExclude(Lottery $lottery, LotteryBank $lotteryBank, LotteryInvalidationService $invalidations): RedirectResponse
+    {
+        abort_unless($lotteryBank->lottery()->is($lottery), 404);
+
+        $toast = DB::transaction(fn (): array => $this->toggleBankEntry($lottery->lockForWriting(), $lotteryBank->refresh(), $invalidations));
+
+        Inertia::flash('toast', $toast);
+
+        return back();
+    }
+
+    public function toggleTransactionExclude(Lottery $lottery, Transaction $transaction, LotteryInvalidationService $invalidations): RedirectResponse
+    {
+        abort_unless($transaction->lottery()->is($lottery), 404);
+
+        $toast = DB::transaction(fn (): array => $this->toggleTransaction($lottery->lockForWriting(), $transaction->refresh(), $invalidations));
+
+        Inertia::flash('toast', $toast);
+
+        return back();
+    }
+
+    /**
+     * @return array{type: string, message: string}
+     */
+    private function toggleBankEntry(Lottery $lottery, LotteryBank $lotteryBank, LotteryInvalidationService $invalidations): array
     {
         $excluding = ! $lotteryBank->is_excluded;
+
+        if (! $excluding && $invalidations->isLocked($lotteryBank->transaction)) {
+            return ['type' => 'error', 'message' => self::RESTORE_LOCKED_MESSAGE];
+        }
 
         if ($excluding) {
             // Remove associated tickets for this bank entry's transaction + phone
@@ -301,6 +345,8 @@ class ImportController extends Controller
                 ->where('transaction_id', $lotteryBank->transaction_id)
                 ->where('phone', $lotteryBank->phone)
                 ->update(['is_excluded' => true, 'ticket_number' => null]);
+
+            $invalidations->tombstoneManually($lotteryBank->transaction);
         } else {
             // Restore: un-exclude all bank entries for same transaction+phone
             LotteryBank::where('lottery_id', $lottery->id)
@@ -315,7 +361,7 @@ class ImportController extends Controller
                 ->orderBy('id')
                 ->get();
 
-            $nextTicketNumber = ($lottery->tickets()->max('ticket_number') ?? 0) + 1;
+            $nextTicketNumber = $lottery->nextTicketNumber();
             $totalAmount = $entries->sum('amount');
             $ticketCount = intdiv($totalAmount, $lottery->price_per_ticket);
 
@@ -337,19 +383,28 @@ class ImportController extends Controller
             if ($ticketsCreated > 0) {
                 $lottery->increment('sold_tickets', $ticketsCreated);
             }
+
+            if (! $lotteryBank->transaction->is_excluded) {
+                $invalidations->releaseManualTombstone($lotteryBank->transaction);
+            }
         }
 
-        Inertia::flash('toast', [
+        return [
             'type' => 'success',
             'message' => $excluding ? 'Сугалаа биш гэж тэмдэглэлээ.' : 'Сугалаа сэргээлээ.',
-        ]);
-
-        return back();
+        ];
     }
 
-    public function toggleTransactionExclude(Lottery $lottery, Transaction $transaction): RedirectResponse
+    /**
+     * @return array{type: string, message: string}
+     */
+    private function toggleTransaction(Lottery $lottery, Transaction $transaction, LotteryInvalidationService $invalidations): array
     {
         $excluding = ! $transaction->is_excluded;
+
+        if (! $excluding && $invalidations->isLocked($transaction)) {
+            return ['type' => 'error', 'message' => self::RESTORE_LOCKED_MESSAGE];
+        }
 
         if ($excluding) {
             // Remove associated tickets for all bank entries of this transaction
@@ -372,6 +427,8 @@ class ImportController extends Controller
                 ->update(['is_excluded' => true, 'ticket_number' => null]);
 
             $transaction->update(['is_excluded' => true]);
+
+            $invalidations->tombstoneManually($transaction);
         } else {
             // Restore: un-exclude all bank entries for this transaction
             LotteryBank::where('lottery_id', $lottery->id)
@@ -386,7 +443,7 @@ class ImportController extends Controller
                 ->orderBy('id')
                 ->get();
 
-            $nextTicketNumber = ($lottery->tickets()->max('ticket_number') ?? 0) + 1;
+            $nextTicketNumber = $lottery->nextTicketNumber();
             $totalAmount = $entries->sum('amount');
             $ticketCount = intdiv($totalAmount, $lottery->price_per_ticket);
 
@@ -408,13 +465,13 @@ class ImportController extends Controller
             if ($ticketsCreated > 0) {
                 $lottery->increment('sold_tickets', $ticketsCreated);
             }
+
+            $invalidations->releaseManualTombstone($transaction);
         }
 
-        Inertia::flash('toast', [
+        return [
             'type' => 'success',
             'message' => $excluding ? 'Гүйлгээ цуцлагдлаа.' : 'Гүйлгээ сэргээгдлээ.',
-        ]);
-
-        return back();
+        ];
     }
 }

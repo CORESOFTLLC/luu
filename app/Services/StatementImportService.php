@@ -33,8 +33,10 @@ class StatementImportService
 
     private const BLOCKED_IMPORT_DIGEST_ITERATIONS = 100000;
 
+    public function __construct(private LotteryInvalidationService $invalidations) {}
+
     /**
-     * @return array{imported: int, tickets_created: int, skipped: int}
+     * @return array{imported: int, tickets_created: int, skipped: int, invalidated: int}
      */
     public function import(Lottery $lottery, UploadedFile $file): array
     {
@@ -43,7 +45,7 @@ class StatementImportService
         $rows = $worksheet->toArray();
 
         if (count($rows) < 2) {
-            return ['imported' => 0, 'tickets_created' => 0, 'skipped' => 0];
+            return ['imported' => 0, 'tickets_created' => 0, 'skipped' => 0, 'invalidated' => 0];
         }
 
         $headerRowIndex = $this->findHeaderRow($rows);
@@ -53,9 +55,13 @@ class StatementImportService
         $imported = 0;
         $ticketsCreated = 0;
         $skipped = 0;
+        $invalidated = 0;
 
-        DB::transaction(function () use ($rows, $headerRowIndex, $columnMap, $lottery, &$imported, &$ticketsCreated, &$skipped) {
-            $nextTicketNumber = ($lottery->tickets()->max('ticket_number') ?? 0) + 1;
+        DB::transaction(function () use ($rows, $headerRowIndex, $columnMap, $lottery, &$imported, &$ticketsCreated, &$skipped, &$invalidated) {
+            $lottery = $lottery->lockForWriting();
+            $closedPeriods = $this->invalidations->closedPeriods($lottery);
+            $balancesByReference = [];
+            $nextTicketNumber = $lottery->nextTicketNumber();
 
             for ($i = $headerRowIndex + 1; $i < count($rows); $i++) {
                 $row = $rows[$i];
@@ -85,6 +91,19 @@ class StatementImportService
                     $row,
                 );
 
+                $balances = $this->balanceSignature($row, $columnMap);
+                $identity = null;
+
+                if ($balances !== null) {
+                    if (str_starts_with($reference, 'AUTO-')) {
+                        $reference = $this->distinguishReference($reference, $balances, $balancesByReference);
+                    }
+
+                    if ($date !== null) {
+                        $identity = hash('sha256', 'v1|'.$date->format('Y-m-d H:i:s').'|'.$amount.'|'.$balances);
+                    }
+                }
+
                 $fingerprint = $this->fingerprintByDateDescription(
                     $date?->format('Y-m-d H:i:s'),
                     $description,
@@ -106,20 +125,33 @@ class StatementImportService
                     continue;
                 }
 
-                if (Transaction::where('bank_reference', $reference)->exists()) {
+                if (Transaction::where('bank_reference', $reference)->exists() || $this->isKnownIdentity($lottery, $identity, $phone, $amount)) {
                     $skipped++;
 
                     continue;
                 }
 
+                $transactedAt = $date ?? now($this->invalidations->timezone());
+                $closingPeriod = $this->invalidations->periodCovering($closedPeriods, $transactedAt->format('Y-m-d'));
+                $tombstone = $this->invalidations->findTombstone($lottery, $reference, $identity, $phone, $amount);
+                $isInvalidated = $closingPeriod !== null || $tombstone !== null;
+
                 $transaction = Transaction::create([
                     'lottery_id' => $lottery->id,
                     'bank_reference' => $reference,
+                    'transfer_identity' => $identity,
                     'phone' => $phone,
                     'amount' => $amount,
                     'description' => $description,
-                    'transacted_at' => $date ?? now(),
+                    'transacted_at' => $transactedAt,
+                    'is_excluded' => $isInvalidated,
                 ]);
+
+                if ($tombstone !== null) {
+                    $tombstone->update(['transaction_id' => $transaction->id]);
+                } elseif ($closingPeriod !== null) {
+                    $this->invalidations->tombstoneForPeriod($transaction, $closingPeriod);
+                }
 
                 $ticketCount = intdiv((int) $amount, $lottery->price_per_ticket);
                 $remainder = (int) $amount % $lottery->price_per_ticket;
@@ -134,6 +166,30 @@ class StatementImportService
                         $transaction->update(['refund_amount' => $refund]);
                     }
                     $remainder = 0;
+                }
+
+                // Previously invalidated transfers are recorded as excluded, without tickets.
+                if ($isInvalidated) {
+                    $entryAmounts = array_fill(0, $ticketCount, $lottery->price_per_ticket);
+                    if ($remainder > 0) {
+                        $entryAmounts[] = $remainder;
+                    }
+
+                    foreach ($entryAmounts as $entryAmount) {
+                        LotteryBank::create([
+                            'lottery_id' => $lottery->id,
+                            'transaction_id' => $transaction->id,
+                            'phone' => $phone,
+                            'amount' => $entryAmount,
+                            'ticket_number' => null,
+                            'is_excluded' => true,
+                        ]);
+                    }
+
+                    $imported++;
+                    $invalidated++;
+
+                    continue;
                 }
 
                 for ($t = 0; $t < $ticketCount; $t++) {
@@ -175,7 +231,7 @@ class StatementImportService
             $lottery->increment('sold_tickets', $ticketsCreated);
         });
 
-        return ['imported' => $imported, 'tickets_created' => $ticketsCreated, 'skipped' => $skipped];
+        return ['imported' => $imported, 'tickets_created' => $ticketsCreated, 'skipped' => $skipped, 'invalidated' => $invalidated];
     }
 
     /**
@@ -188,6 +244,7 @@ class StatementImportService
         // Group unassigned bank entries by phone
         $phoneGroups = LotteryBank::where('lottery_id', $lottery->id)
             ->whereNull('ticket_number')
+            ->where('is_excluded', false)
             ->orderBy('id')
             ->get()
             ->groupBy('phone');
@@ -231,11 +288,11 @@ class StatementImportService
 
     /**
      * @param  array<int, string>  $headers
-     * @return array{date: int, description: int, credit: int, reference: int}
+     * @return array{date: int, description: int, credit: int, reference: int, opening_balance: int|null, closing_balance: int|null}
      */
     private function detectColumns(array $headers): array
     {
-        $map = ['date' => 0, 'description' => 1, 'credit' => 3, 'reference' => 0];
+        $map = ['date' => 0, 'description' => 1, 'credit' => 3, 'reference' => 0, 'opening_balance' => null, 'closing_balance' => null];
 
         foreach ($headers as $index => $header) {
             if (str_contains($header, 'огноо') || str_contains($header, 'date')) {
@@ -250,9 +307,79 @@ class StatementImportService
             if (str_contains($header, 'лавлах') || str_contains($header, 'reference') || str_contains($header, 'ref')) {
                 $map['reference'] = $index;
             }
+            if (str_contains($header, 'эхний үлдэгдэл') || str_contains($header, 'opening balance')) {
+                $map['opening_balance'] = $index;
+            }
+            if (str_contains($header, 'эцсийн үлдэгдэл') || str_contains($header, 'closing balance')) {
+                $map['closing_balance'] = $index;
+            }
         }
 
         return $map;
+    }
+
+    /**
+     * The account's running balance before and after the row. It tells apart transfers that
+     * share time, amount and description, and it does not depend on description formatting.
+     *
+     * @param  array<int, mixed>  $row
+     * @param  array{opening_balance: int|null, closing_balance: int|null}  $columnMap
+     */
+    private function balanceSignature(array $row, array $columnMap): ?string
+    {
+        if ($columnMap['opening_balance'] === null || $columnMap['closing_balance'] === null) {
+            return null;
+        }
+
+        $opening = $this->normalizeBalance($row[$columnMap['opening_balance']] ?? null);
+        $closing = $this->normalizeBalance($row[$columnMap['closing_balance']] ?? null);
+
+        if ($opening === null || $closing === null) {
+            return null;
+        }
+
+        return $opening.'|'.$closing;
+    }
+
+    private function normalizeBalance(mixed $value): ?string
+    {
+        $cleaned = preg_replace('/[^0-9.\-]/', '', (string) $value);
+
+        if ($cleaned === null || preg_match('/^-?\d+(\.\d+)?$/', $cleaned) !== 1) {
+            return null;
+        }
+
+        return number_format((float) $cleaned, 2, '.', '');
+    }
+
+    /**
+     * Rows that share a generated reference but have different balances are separate
+     * transfers: the first keeps the reference, later ones get "#2", "#3", ... in file order.
+     * A row repeating the same balances is the same transfer and keeps the earlier reference.
+     *
+     * @param  array<string, list<string>>  $balancesByReference
+     */
+    private function distinguishReference(string $reference, string $balances, array &$balancesByReference): string
+    {
+        $seen = $balancesByReference[$reference] ?? [];
+        $position = array_search($balances, $seen, true);
+
+        if ($position === false) {
+            $seen[] = $balances;
+            $balancesByReference[$reference] = $seen;
+            $position = count($seen) - 1;
+        }
+
+        return $position === 0 ? $reference : $reference.'#'.($position + 1);
+    }
+
+    private function isKnownIdentity(Lottery $lottery, ?string $identity, string $phone, int $amount): bool
+    {
+        return $identity !== null && $lottery->transactions()
+            ->where('transfer_identity', $identity)
+            ->where('phone', $phone)
+            ->where('amount', $amount)
+            ->exists();
     }
 
     /**

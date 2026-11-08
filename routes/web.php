@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Admin\ImportController;
 use App\Http\Controllers\Admin\LotteryController as AdminLotteryController;
+use App\Http\Controllers\Admin\LotteryInvalidationController;
+use App\Http\Controllers\Admin\LotteryValidPeriodController;
 use App\Http\Controllers\LotteryController;
 use App\Http\Controllers\LotteryTicketController;
 use Illuminate\Support\Facades\Route;
@@ -32,6 +34,12 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     Route::get('lotteries/{lottery}/tickets', [ImportController::class, 'ticketsIndex'])->name('lotteries.tickets.index');
     Route::post('lotteries/{lottery}/bank/{lotteryBank}/toggle-exclude', [ImportController::class, 'toggleExclude'])->name('lotteries.bank.toggle-exclude');
     Route::post('lotteries/{lottery}/transactions/{transaction}/toggle-exclude', [ImportController::class, 'toggleTransactionExclude'])->name('lotteries.transactions.toggle-exclude');
+
+    Route::middleware('can:manage-lottery-invalidations')->group(function () {
+        Route::get('lotteries/{lottery}/invalidations/preview', [LotteryInvalidationController::class, 'preview'])->name('lotteries.invalidations.preview');
+        Route::post('lotteries/{lottery}/invalidations', [LotteryInvalidationController::class, 'store'])->name('lotteries.invalidations.store');
+        Route::put('lotteries/{lottery}/valid-period', [LotteryValidPeriodController::class, 'update'])->name('lotteries.valid-period.update');
+    });
 });
 
 require __DIR__.'/settings.php';
