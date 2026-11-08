@@ -1,4 +1,5 @@
 import confetti from 'canvas-confetti';
+import { formatIban } from '@/lib/iban';
 import { Check, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -78,6 +79,8 @@ export default function ParticipateModal({
         return null;
     }
 
+    const maxTickets = lottery.max_tickets_per_transaction ?? 15;
+    const formattedMaxAmount = new Intl.NumberFormat('mn-MN').format(maxTickets * lottery.price_per_ticket);
     const totalAmount = ticketCount * lottery.price_per_ticket;
     const formattedTotal = new Intl.NumberFormat('mn-MN').format(totalAmount);
 
@@ -123,9 +126,12 @@ export default function ParticipateModal({
                                     value={[ticketCount]}
                                     onValueChange={(v) => setTicketCount(v[0])}
                                     min={1}
-                                    max={20}
+                                    max={maxTickets}
                                     step={1}
                                 />
+                                <p className="text-sm text-muted-foreground">
+                                    Нэг гүйлгээнд дээд тал нь {maxTickets} ширхэг ({formattedMaxAmount} ₮)
+                                </p>
                             </div>
 
                             {/* Result - always visible */}
@@ -162,7 +168,7 @@ export default function ParticipateModal({
                                         </div>
                                         <div className="bg-[#174822]/5 px-4 py-3 text-center">
                                             <p className="font-mono text-3xl font-extrabold tracking-wider text-[#174822]">
-                                                IBAN:53000500 {lottery.bank_account}
+                                                {formatIban(lottery.bank_account)}
                                             </p>
                                         </div>
                                     </div>

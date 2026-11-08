@@ -1,11 +1,19 @@
 import { Form, Head, router } from '@inertiajs/react';
 import { ImagePlus, Trash2 } from 'lucide-react';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import Heading from '@/components/heading';
 import InputError from '@/components/input-error';
 import RichTextEditor from '@/components/rich-text-editor';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Spinner } from '@/components/ui/spinner';
@@ -22,9 +30,58 @@ function formatDatetime(value: string | null) {
 }
 
 export default function AdminLotteryEdit({ lottery }: Props) {
+    const [unlimited, setUnlimited] = useState(lottery.total_tickets === null);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [confirmText, setConfirmText] = useState('');
+    const [deleteError, setDeleteError] = useState<string | undefined>();
+    const [deleting, setDeleting] = useState(false);
+    const confirmed = confirmText.trim() === 'батлах';
+
+    function submitDelete() {
+        if (!confirmed) return;
+        setDeleting(true);
+        router.delete(`/admin/lotteries/${lottery.id}`, {
+            data: { confirm: confirmText.trim() },
+            onError: (errors) => setDeleteError(errors.confirm),
+            onFinish: () => setDeleting(false),
+        });
+    }
     return (
         <>
             <Head title={`${lottery.name} засах`} />
+
+            <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Сугалаа устгах</DialogTitle>
+                        <DialogDescription>
+                            "{lottery.name}" сугалаа болон түүний бүх гүйлгээ, сугалааны дугаар, банкны импорт, зургууд бүрмөсөн устна. Энэ үйлдлийг буцаах боломжгүй.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-2">
+                        <Label htmlFor="delete-confirm">Баталгаажуулахын тулд <b>батлах</b> гэж бичнэ үү</Label>
+                        <Input
+                            id="delete-confirm"
+                            value={confirmText}
+                            autoComplete="off"
+                            onChange={(e) => setConfirmText(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') submitDelete();
+                            }}
+                        />
+                        <InputError message={deleteError} />
+                    </div>
+                    <DialogFooter>
+                        <Button type="button" variant="outline" onClick={() => setDeleteOpen(false)}>
+                            Болих
+                        </Button>
+                        <Button type="button" variant="destructive" disabled={!confirmed || deleting} onClick={submitDelete}>
+                            {deleting && <Spinner />}
+                            Устгах
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <div className="space-y-6">
                 <div className="flex items-center justify-between">
@@ -37,6 +94,11 @@ export default function AdminLotteryEdit({ lottery }: Props) {
                         <Badge variant={lottery.is_active ? 'default' : 'secondary'}>
                             {lottery.is_active ? 'Идэвхтэй' : 'Идэвхгүй'}
                         </Badge>
+                        <Button variant="outline" size="sm" asChild>
+                            <a href={`/admin/lotteries/${lottery.id}/tickets/print`} target="_blank" rel="noopener">
+                                Бүх сугалааг хэвлэх
+                            </a>
+                        </Button>
                         <Button
                             type="button"
                             variant={lottery.is_active ? 'destructive' : 'default'}
@@ -46,6 +108,18 @@ export default function AdminLotteryEdit({ lottery }: Props) {
                             }}
                         >
                             {lottery.is_active ? 'Идэвхгүй болгох' : 'Идэвхжүүлэх'}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => {
+                                setConfirmText('');
+                                setDeleteError(undefined);
+                                setDeleteOpen(true);
+                            }}
+                        >
+                            Устгах
                         </Button>
                     </div>
                 </div>
@@ -160,12 +234,54 @@ export default function AdminLotteryEdit({ lottery }: Props) {
                                     id="total_tickets"
                                     name="total_tickets"
                                     type="number"
-                                    required
-                                    defaultValue={lottery.total_tickets}
+                                    required={!unlimited}
+                                    disabled={unlimited}
+                                    defaultValue={lottery.total_tickets ?? ''}
                                     min={1}
                                 />
+                                <label className="flex items-center gap-2 text-sm">
+                                    <input
+                                        type="checkbox"
+                                        name="is_unlimited"
+                                        value="1"
+                                        checked={unlimited}
+                                        onChange={(e) =>
+                                            setUnlimited(e.target.checked)
+                                        }
+                                        className="size-4 rounded border-input"
+                                    />
+                                    Хязгааргүй (нийт тоо тогтоохгүй)
+                                </label>
                                 <InputError message={errors.total_tickets} />
                             </div>
+
+                            <div className="grid gap-2">
+                                <Label htmlFor="max_tickets_per_transaction">
+                                    Нэг гүйлгээнд олгох дээд сугалаа
+                                </Label>
+                                <Input
+                                    id="max_tickets_per_transaction"
+                                    name="max_tickets_per_transaction"
+                                    type="number"
+                                    min={1}
+                                    defaultValue={lottery.max_tickets_per_transaction ?? ''}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Хоосон бол хязгааргүй. Илүү шилжүүлсэн дүнг "Буцаах дүн" болгож тэмдэглэнэ.
+                                </p>
+                                <InputError message={errors.max_tickets_per_transaction} />
+                            </div>
+
+                            <label className="flex items-center gap-2 text-sm">
+                                <input
+                                    type="checkbox"
+                                    name="show_ticket_numbers"
+                                    value="1"
+                                    defaultChecked={!!lottery.show_ticket_numbers}
+                                    className="size-4 rounded border-input"
+                                />
+                                Сугалааны дугаар харуулах (унтраалттай бол утасны дугаараар жагсаана)
+                            </label>
 
                             <div className="grid gap-2">
                                 <Label htmlFor="starts_at">Эхлэх огноо</Label>

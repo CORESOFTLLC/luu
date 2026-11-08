@@ -14,7 +14,7 @@ class LotteryTicketController extends Controller
     public function check(Request $request, Lottery $lottery): JsonResponse
     {
         $validated = $request->validate([
-            'phone' => ['required', 'string', 'regex:/^[6-9]\d{7}$/'],
+            'phone' => ['required', 'string', 'regex:/^\d{8}$/'],
         ]);
 
         $tickets = LotteryTicket::where('lottery_id', $lottery->id)
@@ -23,9 +23,14 @@ class LotteryTicketController extends Controller
             ->orderBy('ticket_number')
             ->get();
 
+        if (! $lottery->show_ticket_numbers) {
+            $tickets->each->makeHidden('ticket_number');
+        }
+
         // Get remainder bank entries (no ticket assigned) with transaction for date
         $remainders = LotteryBank::where('lottery_id', $lottery->id)
             ->where('phone', $validated['phone'])
+            ->where('is_excluded', false)
             ->whereNull('ticket_number')
             ->with('transaction:id,amount,description,transacted_at')
             ->get(['id', 'transaction_id', 'phone', 'amount']);
@@ -35,6 +40,7 @@ class LotteryTicketController extends Controller
         // Get all transactions for this phone
         $transactions = Transaction::where('lottery_id', $lottery->id)
             ->where('phone', $validated['phone'])
+            ->where('is_excluded', false)
             ->orderBy('transacted_at')
             ->get(['id', 'amount', 'description', 'transacted_at']);
 
@@ -45,6 +51,7 @@ class LotteryTicketController extends Controller
             'remainder_total' => $remainderTotal,
             'transactions' => $transactions,
             'price_per_ticket' => $lottery->price_per_ticket,
+            'show_ticket_numbers' => $lottery->show_ticket_numbers,
         ]);
     }
 }

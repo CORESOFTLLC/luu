@@ -16,9 +16,11 @@ export type LotteryData = {
     is_active: boolean;
     images?: LotteryImageData[];
     price_per_ticket: number;
-    total_tickets: number;
-    sold_tickets: number;
-    completion: number;
+    total_tickets?: number | null;
+    max_tickets_per_transaction?: number | null;
+    show_ticket_numbers?: boolean;
+    sold_tickets?: number;
+    completion?: number;
     is_finished: boolean;
     starts_at: string;
     draws_at: string;
@@ -26,7 +28,7 @@ export type LotteryData = {
 
 export type LotteryTicketData = {
     id: number;
-    ticket_number: number;
+    ticket_number?: number;
     phone: string;
     transaction_id: number | null;
     created_at: string;

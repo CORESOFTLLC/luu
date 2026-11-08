@@ -21,20 +21,33 @@ class ImportController extends Controller
 
         $search = $request->string('search')->trim()->value();
         $status = $request->string('status')->trim()->value();
+        $sortBy = $request->string('sort_by')->trim()->value();
+        $sortDir = $request->string('sort_dir')->trim()->lower()->value();
+
+        $allowedSorts = ['bank_reference', 'phone', 'amount', 'description', 'transacted_at', 'is_excluded', 'refund_amount'];
+        if (! in_array($sortBy, $allowedSorts, true)) {
+            $sortBy = 'transacted_at';
+        }
+
+        if (! in_array($sortDir, ['asc', 'desc'], true)) {
+            $sortDir = 'desc';
+        }
 
         $totalAmount = $lottery->transactions()->sum('amount');
+        $refundTotal = (int) $lottery->transactions()->where('is_excluded', false)->sum('refund_amount');
         $excludedCount = $lottery->bankEntries()->where('is_excluded', true)->count();
         $activeCount = $lottery->bankEntries()->where('is_excluded', false)->count();
         $transactionsCount = $lottery->transactions()->count();
 
         $recentTransactions = $lottery->transactions()
-            ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
+            ->when($search, fn ($q) => $q->where(fn ($w) => $w->where('phone', 'like', "%{$search}%")
                 ->orWhere('bank_reference', 'like', "%{$search}%")
-                ->orWhere('description', 'like', "%{$search}%"))
+                ->orWhere('description', 'like', "%{$search}%")))
+            ->when($status === 'refund', fn ($q) => $q->where('refund_amount', '>', 0))
             ->when($status === 'excluded', fn ($q) => $q->where('is_excluded', true))
             ->when($status === 'active', fn ($q) => $q->where('is_excluded', false))
-            ->latest()
-            ->paginate(20, ['id', 'bank_reference', 'phone', 'amount', 'description', 'transacted_at', 'is_excluded'], 'transactions_page')
+            ->orderBy($sortBy, $sortDir)
+            ->paginate(20, ['id', 'bank_reference', 'phone', 'amount', 'refund_amount', 'description', 'transacted_at', 'is_excluded'], 'transactions_page')
             ->withQueryString();
 
         return Inertia::render('admin/lotteries/import', [
@@ -49,11 +62,14 @@ class ImportController extends Controller
                 'excluded_count' => $excludedCount,
                 'active_count' => $activeCount,
                 'transactions_count' => $transactionsCount,
+                'refund_total' => $refundTotal,
             ],
             'recentTransactions' => $recentTransactions,
             'filters' => [
                 'search' => $search,
                 'status' => $status,
+                'sort_by' => $sortBy,
+                'sort_dir' => $sortDir,
             ],
         ]);
     }
@@ -62,15 +78,39 @@ class ImportController extends Controller
     {
         $search = $request->string('search')->trim()->value();
         $status = $request->string('status')->trim()->value();
+        $sortBy = $request->string('sort_by')->trim()->value();
+        $sortDir = $request->string('sort_dir')->trim()->lower()->value();
 
-        $bankEntries = $lottery->bankEntries()
+        $allowedSorts = ['ticket_number', 'phone', 'amount', 'description', 'transacted_at', 'is_excluded', 'refund_amount'];
+        if (! in_array($sortBy, $allowedSorts, true)) {
+            $sortBy = 'ticket_number';
+        }
+
+        if (! in_array($sortDir, ['asc', 'desc'], true)) {
+            $sortDir = 'asc';
+        }
+
+        $bankEntriesQuery = $lottery->bankEntries()
             ->with('transaction:id,bank_reference,description,transacted_at')
             ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
                 ->orWhere('ticket_number', $search)
                 ->orWhereHas('transaction', fn ($q) => $q->where('bank_reference', 'like', "%{$search}%")))
             ->when($status === 'excluded', fn ($q) => $q->where('is_excluded', true))
-            ->when($status === 'active', fn ($q) => $q->where('is_excluded', false))
-            ->orderBy('ticket_number')
+            ->when($status === 'active', fn ($q) => $q->where('is_excluded', false));
+
+        if (in_array($sortBy, ['description', 'transacted_at'], true)) {
+            $bankEntriesQuery->orderBy(
+                Transaction::query()
+                    ->select($sortBy)
+                    ->whereColumn('transactions.id', 'lottery_banks.transaction_id')
+                    ->limit(1),
+                $sortDir,
+            );
+        } else {
+            $bankEntriesQuery->orderBy($sortBy, $sortDir);
+        }
+
+        $bankEntries = $bankEntriesQuery
             ->paginate(100, ['id', 'lottery_id', 'transaction_id', 'phone', 'amount', 'ticket_number', 'is_excluded', 'created_at'], 'page')
             ->withQueryString();
 
@@ -79,12 +119,72 @@ class ImportController extends Controller
                 'id' => $lottery->id,
                 'name' => $lottery->name,
                 'price_per_ticket' => $lottery->price_per_ticket,
+                'show_ticket_numbers' => $lottery->show_ticket_numbers,
             ],
             'bankEntries' => $bankEntries,
             'filters' => [
                 'search' => $search,
                 'status' => $status,
+                'sort_by' => $sortBy,
+                'sort_dir' => $sortDir,
             ],
+        ]);
+    }
+
+    /**
+     * Server-rendered A4 print sheet: 3 columns x 13 rows, one cell per ticket,
+     * phone repeated once per ticket, in import order.
+     */
+    public function printTickets(Request $request, Lottery $lottery): \Illuminate\Contracts\View\View
+    {
+        // Optional range on the bank statement transfer datetime (transactions.transacted_at).
+        $parse = function (?string $v) {
+            if (! $v) {
+                return null;
+            }
+            try {
+                return \Carbon\Carbon::parse($v);
+            } catch (\Throwable) {
+                return null;
+            }
+        };
+        $from = $parse($request->query('from'));
+        $to = $parse($request->query('to'));
+
+        $tickets = \Illuminate\Support\Facades\DB::table('lottery_tickets')
+            ->join('transactions', 'transactions.id', '=', 'lottery_tickets.transaction_id')
+            ->where('lottery_tickets.lottery_id', $lottery->id)
+            ->when($from, fn ($q) => $q->where('transactions.transacted_at', '>=', $from))
+            ->when($to, fn ($q) => $q->where('transactions.transacted_at', '<=', $to))
+            ->orderBy('transactions.transacted_at')
+            ->orderBy('lottery_tickets.id')
+            ->get(['lottery_tickets.id', 'lottery_tickets.ticket_number', 'lottery_tickets.phone']);
+
+        // Statement totals for the same lottery and range.
+        $stats = \Illuminate\Support\Facades\DB::table('transactions')
+            ->where('lottery_id', $lottery->id)
+            ->when($from, fn ($q) => $q->where('transacted_at', '>=', $from))
+            ->when($to, fn ($q) => $q->where('transacted_at', '<=', $to))
+            ->selectRaw('COUNT(*) as cnt, COALESCE(SUM(amount),0) as amount, COALESCE(SUM(refund_amount),0) as refund, SUM(is_excluded) as excluded')
+            ->first();
+
+        // Keep each phone's tickets together (by first appearance) and number them #1..#N per phone.
+        $tickets = $tickets->groupBy('phone')
+            ->flatMap(fn ($group) => $group->values()->map(function ($t, $i) {
+                $t->seq = $i + 1;
+
+                return $t;
+            }))
+            ->values();
+
+        return view('admin.print-tickets', [
+            'lottery' => $lottery,
+            'total' => $tickets->count(),
+            'pages' => $tickets->chunk(36),
+            'showNumbers' => (bool) $lottery->show_ticket_numbers,
+            'from' => $from,
+            'to' => $to,
+            'stats' => $stats,
         ]);
     }
 
@@ -93,12 +193,37 @@ class ImportController extends Controller
         $lottery->loadCount('tickets');
 
         $search = $request->string('search')->trim()->value();
+        $sortBy = $request->string('sort_by')->trim()->value();
+        $sortDir = $request->string('sort_dir')->trim()->lower()->value();
 
-        $tickets = $lottery->tickets()
+        $allowedSorts = ['ticket_number', 'phone', 'transacted_at'];
+        if (! in_array($sortBy, $allowedSorts, true)) {
+            $sortBy = 'ticket_number';
+        }
+
+        if (! in_array($sortDir, ['asc', 'desc'], true)) {
+            $sortDir = 'asc';
+        }
+
+        $ticketsQuery = $lottery->tickets()
+            ->with('transaction:id,transacted_at')
             ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
-                ->orWhere('ticket_number', $search))
-            ->orderBy('ticket_number')
-            ->paginate(100, ['id', 'ticket_number', 'phone', 'created_at'], 'page')
+                ->orWhere('ticket_number', $search));
+
+        if ($sortBy === 'transacted_at') {
+            $ticketsQuery->orderBy(
+                Transaction::query()
+                    ->select('transacted_at')
+                    ->whereColumn('transactions.id', 'lottery_tickets.transaction_id')
+                    ->limit(1),
+                $sortDir,
+            );
+        } else {
+            $ticketsQuery->orderBy($sortBy, $sortDir);
+        }
+
+        $tickets = $ticketsQuery
+            ->paginate(100, ['id', 'transaction_id', 'ticket_number', 'phone'], 'page')
             ->withQueryString();
 
         return Inertia::render('admin/lotteries/tickets', [
@@ -106,10 +231,13 @@ class ImportController extends Controller
                 'id' => $lottery->id,
                 'name' => $lottery->name,
                 'tickets_count' => $lottery->tickets_count,
+                'show_ticket_numbers' => $lottery->show_ticket_numbers,
             ],
             'tickets' => $tickets,
             'filters' => [
                 'search' => $search,
+                'sort_by' => $sortBy,
+                'sort_dir' => $sortDir,
             ],
         ]);
     }

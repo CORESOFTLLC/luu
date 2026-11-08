@@ -1,5 +1,5 @@
 import { Form, Head, Link, router } from '@inertiajs/react';
-import { Upload, FileSpreadsheet, Trash2, Search, ChevronLeft, ChevronRight, Ban, RotateCcw } from 'lucide-react';
+import { Upload, FileSpreadsheet, Trash2, Search, ChevronLeft, ChevronRight, Ban, RotateCcw, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useRef, useState, useCallback } from 'react';
 import Heading from '@/components/heading';
 import { Button } from '@/components/ui/button';
@@ -23,11 +23,12 @@ import {
 type Lottery = {
     id: number;
     name: string;
-    total_tickets: number;
+    total_tickets: number | null;
     sold_tickets: number;
     tickets_count: number;
     price_per_ticket: number;
     total_amount: number;
+    refund_total: number;
     excluded_count: number;
     active_count: number;
     transactions_count: number;
@@ -38,6 +39,7 @@ type Transaction = {
     bank_reference: string;
     phone: string;
     amount: number;
+    refund_amount: number;
     description: string;
     transacted_at: string;
     is_excluded: boolean;
@@ -60,6 +62,8 @@ type Props = {
     filters: {
         search: string;
         status: string;
+        sort_by: string;
+        sort_dir: 'asc' | 'desc';
     };
 };
 
@@ -71,6 +75,8 @@ export default function AdminLotteryImport({
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [searchValue, setSearchValue] = useState(filters.search ?? '');
     const [statusFilter, setStatusFilter] = useState(filters.status ?? '');
+    const [sortBy, setSortBy] = useState(filters.sort_by ?? 'transacted_at');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>(filters.sort_dir ?? 'desc');
     const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
 
     const handleSearch = useCallback((value: string) => {
@@ -79,19 +85,55 @@ export default function AdminLotteryImport({
         searchTimeout.current = setTimeout(() => {
             router.get(
                 `/admin/lotteries/${lottery.id}/import`,
-                { search: value || undefined, status: statusFilter || undefined },
+                {
+                    search: value || undefined,
+                    status: statusFilter || undefined,
+                    sort_by: sortBy,
+                    sort_dir: sortDir,
+                },
                 { preserveState: true, replace: true },
             );
         }, 300);
-    }, [lottery.id, statusFilter]);
+    }, [lottery.id, statusFilter, sortBy, sortDir]);
 
     const handleStatusFilter = (value: string) => {
         setStatusFilter(value);
         router.get(
             `/admin/lotteries/${lottery.id}/import`,
-            { search: searchValue || undefined, status: value || undefined },
+            {
+                search: searchValue || undefined,
+                status: value || undefined,
+                sort_by: sortBy,
+                sort_dir: sortDir,
+            },
             { preserveState: true, replace: true },
         );
+    };
+
+    const handleSort = (column: string) => {
+        const nextDir: 'asc' | 'desc' = sortBy === column && sortDir === 'asc' ? 'desc' : 'asc';
+        setSortBy(column);
+        setSortDir(nextDir);
+        router.get(
+            `/admin/lotteries/${lottery.id}/import`,
+            {
+                search: searchValue || undefined,
+                status: statusFilter || undefined,
+                sort_by: column,
+                sort_dir: nextDir,
+            },
+            { preserveState: true, replace: true },
+        );
+    };
+
+    const SortIcon = ({ column }: { column: string }) => {
+        if (sortBy !== column) {
+            return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-40" />;
+        }
+
+        return sortDir === 'asc'
+            ? <ArrowUp className="ml-1 inline h-3 w-3" />
+            : <ArrowDown className="ml-1 inline h-3 w-3" />;
     };
 
     const PaginationControls = ({ paginator, paramName }: { paginator: PaginatedData<unknown>; paramName: string }) => {
@@ -202,7 +244,7 @@ export default function AdminLotteryImport({
                                 {lottery.tickets_count}
                                 <span className="text-sm font-normal text-muted-foreground">
                                     {' '}
-                                    / {lottery.total_tickets}
+                                    / {lottery.total_tickets ?? 'Хязгааргүй'}
                                 </span>
                             </p>
                         </CardContent>
@@ -348,6 +390,13 @@ export default function AdminLotteryImport({
                         >
                             Сугалаа биш
                         </Button>
+                        <Button
+                            variant={statusFilter === 'refund' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handleStatusFilter('refund')}
+                        >
+                            Буцаах ({new Intl.NumberFormat('mn-MN').format(lottery.refund_total)}₮)
+                        </Button>
                     </div>
                 </div>
 
@@ -364,12 +413,27 @@ export default function AdminLotteryImport({
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Лавлах</TableHead>
-                                        <TableHead>Утас</TableHead>
-                                        <TableHead>Дүн</TableHead>
-                                        <TableHead>Гүйлгээний утга</TableHead>
-                                        <TableHead>Огноо</TableHead>
-                                        <TableHead>Төлөв</TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('bank_reference')}>
+                                            Лавлах <SortIcon column="bank_reference" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('phone')}>
+                                            Утас <SortIcon column="phone" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('amount')}>
+                                            Дүн <SortIcon column="amount" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('refund_amount')}>
+                                            Буцаах дүн <SortIcon column="refund_amount" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('description')}>
+                                            Гүйлгээний утга <SortIcon column="description" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('transacted_at')}>
+                                            Банкаар шилжүүлсэн огноо <SortIcon column="transacted_at" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('is_excluded')}>
+                                            Төлөв <SortIcon column="is_excluded" />
+                                        </TableHead>
                                         <TableHead className="w-[80px]">Үйлдэл</TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -385,6 +449,11 @@ export default function AdminLotteryImport({
                                                     'mn-MN',
                                                 ).format(tx.amount)}
                                                 ₮
+                                            </TableCell>
+                                            <TableCell className={tx.refund_amount > 0 ? 'font-semibold text-red-600' : 'text-muted-foreground'}>
+                                                {tx.refund_amount > 0
+                                                    ? `${new Intl.NumberFormat('mn-MN').format(tx.refund_amount)}₮`
+                                                    : '—'}
                                             </TableCell>
                                             <TableCell className="max-w-[200px] truncate text-xs">
                                                 {tx.description}

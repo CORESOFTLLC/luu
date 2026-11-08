@@ -1,4 +1,5 @@
 import { Head, Link } from '@inertiajs/react';
+import { formatIban } from '@/lib/iban';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { useState } from 'react';
 import ParticipateModal from '@/components/participate-modal';
@@ -91,30 +92,6 @@ export default function LotteryShow({ lottery }: Props) {
                                 </CardContent>
                             </Card>
 
-                            {/* Progress */}
-                            <Card>
-                                <CardContent className="p-5 space-y-3">
-                                    <div className="flex items-end justify-between">
-                                        <span className="text-sm font-medium text-muted-foreground">Сугалааны хувь</span>
-                                        <span className="text-3xl font-extrabold text-primary">
-                                            {new Intl.NumberFormat('mn-MN').format(lottery.sold_tickets)}
-                                            <span className="text-lg font-semibold text-muted-foreground">
-                                                /{new Intl.NumberFormat('mn-MN').format(lottery.total_tickets)}
-                                            </span>
-                                        </span>
-                                    </div>
-                                    <div className="relative h-5 w-full overflow-hidden rounded-full bg-muted">
-                                        <div
-                                            className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70 transition-all duration-500"
-                                            style={{ width: `${Math.min(lottery.completion, 100)}%` }}
-                                        />
-                                        <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-primary-foreground mix-blend-difference">
-                                            {lottery.completion}%
-                                        </span>
-                                    </div>
-                                </CardContent>
-                            </Card>
-
                             {/* Details */}
                             <Card>
                                 <CardContent className="p-6">
@@ -153,119 +130,9 @@ export default function LotteryShow({ lottery }: Props) {
                                                 {formattedPrice} төгрөг
                                             </dd>
                                         </div>
-                                        <div>
-                                            <dt className="text-sm font-bold text-foreground">
-                                                Нийт сугалааны тоо:
-                                            </dt>
-                                            <dd className="text-sm text-muted-foreground">
-                                                {new Intl.NumberFormat(
-                                                    'mn-MN',
-                                                ).format(
-                                                    lottery.total_tickets,
-                                                )}{' '}
-                                                ширхэг
-                                            </dd>
-                                        </div>
-                                        <div>
-                                            <dt className="text-sm font-bold text-foreground">
-                                                Зарагдсан:
-                                            </dt>
-                                            <dd className="text-sm text-muted-foreground">
-                                                {new Intl.NumberFormat(
-                                                    'mn-MN',
-                                                ).format(
-                                                    lottery.sold_tickets,
-                                                )}{' '}
-                                                ширхэг ({lottery.completion}%)
-                                            </dd>
-                                        </div>
                                     </dl>
                                 </CardContent>
                             </Card>
-
-                            {lottery.description && (
-                                <Card className="overflow-hidden border-0 p-0">
-                                    {/* Poster header */}
-                                    <div className="bg-gradient-to-br from-primary via-primary/90 to-primary/70 px-6 py-5 text-center">
-                                        <p className="text-sm font-medium text-primary-foreground/70 uppercase tracking-widest">Атриш Луу</p>
-                                        <h2 className="text-2xl font-extrabold text-primary-foreground mt-1">
-                                            🏆 Сугалааны шагналын сангийн мэдээлэл
-                                        </h2>
-                                    </div>
-
-                                    <div className="p-5 space-y-3 bg-gradient-to-b from-card to-muted/30">
-                                        {/* Grand Prize */}
-                                        <div className="relative overflow-hidden rounded-xl border-2 border-yellow-400 bg-gradient-to-r from-yellow-50 to-amber-50 dark:from-yellow-950/30 dark:to-amber-950/30 p-5">
-                                            <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-900 text-xs font-extrabold px-3 py-1 rounded-bl-lg">
-                                                1-р АЗТАН
-                                            </div>
-                                            <div className="flex items-start gap-4">
-                                                <span className="text-5xl">🚗</span>
-                                                <div>
-                                                    <h3 className="text-xl font-extrabold text-foreground">
-                                                        Toyota Harrier Hybrid
-                                                    </h3>
-                                                    <p className="text-sm font-semibold text-yellow-700 dark:text-yellow-400">
-                                                        Төмөр хүлэг (машин)
-                                                    </p>
-                                                    <div className="mt-2 flex flex-wrap gap-1.5">
-                                                        {['2020-2026 он', '360° камер', '4WD', '4 шинэ дугуй', 'Суудал халдаг', 'Hybrid Full'].map((tag) => (
-                                                            <span key={tag} className="rounded-full bg-yellow-100 dark:bg-yellow-900/40 px-2.5 py-0.5 text-xs font-semibold text-yellow-800 dark:text-yellow-300">
-                                                                {tag}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* 2nd, 3rd, 4th prizes */}
-                                        <div className="grid gap-3 sm:grid-cols-3">
-                                            <div className="rounded-xl border bg-card p-4 text-center space-y-2">
-                                                <span className="inline-block rounded-full bg-gray-100 dark:bg-gray-800 px-2.5 py-0.5 text-xs font-bold text-muted-foreground">2-р АЗТАН</span>
-                                                <p className="text-4xl">🐎</p>
-                                                <p className="text-sm font-bold">Хурдан хүлэг</p>
-                                                <p className="text-xs text-muted-foreground">(Адуу)</p>
-                                            </div>
-                                            <div className="rounded-xl border bg-card p-4 text-center space-y-2">
-                                                <span className="inline-block rounded-full bg-gray-100 dark:bg-gray-800 px-2.5 py-0.5 text-xs font-bold text-muted-foreground">3-р АЗТАН</span>
-                                                <p className="text-4xl">📱</p>
-                                                <p className="text-sm font-bold">iPhone 17 Pro Max</p>
-                                            </div>
-                                            <div className="rounded-xl border bg-card p-4 text-center space-y-2">
-                                                <span className="inline-block rounded-full bg-gray-100 dark:bg-gray-800 px-2.5 py-0.5 text-xs font-bold text-muted-foreground">4-р АЗТАН</span>
-                                                <p className="text-4xl">🐏</p>
-                                                <p className="text-sm font-bold">Бүтэн бэлдсэн хонь</p>
-                                            </div>
-                                        </div>
-
-                                        {/* Cash prizes */}
-                                        <div className="rounded-xl border-2 border-green-400 bg-green-50 dark:bg-green-950/20 p-4 text-center">
-                                            <p className="text-3xl mb-1">💰</p>
-                                            <p className="text-lg font-extrabold text-green-700 dark:text-green-400">
-                                                12 хүн × 500,000₮
-                                            </p>
-                                            <p className="text-sm text-green-600 dark:text-green-500">
-                                                Хагас сая төгрөгийн эзэн болно!
-                                            </p>
-                                        </div>
-
-                                        {/* Event info */}
-                                        <div className="rounded-xl bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30 border border-blue-200 dark:border-blue-800 p-4 space-y-2 text-center">
-                                            <p className="text-2xl">🎪</p>
-                                            <p className="text-base font-bold text-blue-800 dark:text-blue-300">
-                                                6 сарын 1-нд Ижий Бантантай
-                                            </p>
-                                            <p className="text-sm text-blue-700 dark:text-blue-400">
-                                                Цайгаа <span className="font-bold">ҮНЭГҮЙ</span> тоглоомтой гэр бүл хүүхдийн зусландаа хийхээр боллоо.
-                                            </p>
-                                            <p className="text-xs text-muted-foreground">
-                                                Хүүхдийн хүрээлэн бүтээн байгуулах их ажил байгаа 🙏
-                                            </p>
-                                        </div>
-                                    </div>
-                                </Card>
-                            )}
                         </div>
 
                         {/* Right Column - Actions (2/5) */}
@@ -291,7 +158,7 @@ export default function LotteryShow({ lottery }: Props) {
                                                 Дансны дугаар
                                             </p>
                                             <p className="font-mono text-xl font-extrabold tracking-wider text-[#174822]">
-                                                IBAN:53000500 {lottery.bank_account}
+                                                {formatIban(lottery.bank_account)}
                                             </p>
                                         </div>
                                         <div className="rounded-lg border border-yellow-500 bg-yellow-50 dark:bg-yellow-950/30 p-3">

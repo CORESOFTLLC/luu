@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['name', 'slug', 'image', 'description', 'bank_account', 'bank_name', 'location', 'is_active', 'price_per_ticket', 'total_tickets', 'sold_tickets', 'starts_at', 'draws_at'])]
+#[Fillable(['name', 'slug', 'image', 'description', 'bank_account', 'bank_name', 'location', 'is_active', 'price_per_ticket', 'max_tickets_per_transaction', 'show_ticket_numbers', 'total_tickets', 'sold_tickets', 'starts_at', 'draws_at'])]
 class Lottery extends Model
 {
     /** @use HasFactory<LotteryFactory> */
@@ -26,6 +26,8 @@ class Lottery extends Model
             'draws_at' => 'datetime',
             'price_per_ticket' => 'integer',
             'total_tickets' => 'integer',
+            'max_tickets_per_transaction' => 'integer',
+            'show_ticket_numbers' => 'boolean',
             'sold_tickets' => 'integer',
             'is_active' => 'boolean',
         ];
@@ -65,11 +67,16 @@ class Lottery extends Model
 
     public function completionPercentage(): int
     {
-        if ($this->total_tickets === 0) {
+        if (! $this->total_tickets) {
             return 0;
         }
 
         return (int) round(($this->sold_tickets / $this->total_tickets) * 100);
+    }
+
+    public function isUnlimited(): bool
+    {
+        return $this->total_tickets === null;
     }
 
     public function isFinished(): bool

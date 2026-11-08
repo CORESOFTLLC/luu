@@ -13,6 +13,27 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 class StatementImportService
 {
     /**
+     * Static import block list by date+description fingerprint, grouped by bank-local day.
+     *
+     * Each digest is PBKDF2-SHA256 of "Y-m-d H:i:s|normalized_description" so the
+     * statement details (phone numbers, names) stay out of the public repository.
+     *
+     * @var array<string, list<string>>
+     */
+    private const BLOCKED_IMPORT_DIGESTS = [
+        '2026-04-14' => ['cb6fc5095ee29f6a84c8acfa17060bb9a6796a741cdc63a574f1a08894b79723'],
+        '2026-04-21' => [
+            'f7bf6374ef0440efbfc3b56b3a260a306c144365a594069e46cdf35e5e2ce972',
+            'bae298a50c4d048ed26c33ee493a23a1cd5d56d7c264fffd23fd9fcf9804d56c',
+        ],
+        '2026-04-24' => ['2b93726170a48ea6636ae7248f9f943ef8560384c9be44f5dd7091b250671c94'],
+    ];
+
+    private const BLOCKED_IMPORT_DIGEST_SALT = 'luu-import-block-v1';
+
+    private const BLOCKED_IMPORT_DIGEST_ITERATIONS = 100000;
+
+    /**
      * @return array{imported: int, tickets_created: int, skipped: int}
      */
     public function import(Lottery $lottery, UploadedFile $file): array
@@ -54,8 +75,27 @@ class StatementImportService
                 }
 
                 $description = trim((string) ($row[$columnMap['description']] ?? ''));
-                $reference = trim((string) ($row[$columnMap['reference']] ?? 'ROW-'.$i.'-'.md5(implode('|', array_map('strval', $row)))));
                 $date = $this->parseDate($row[$columnMap['date']] ?? null);
+                $reference = $this->resolveReference(
+                    $row[$columnMap['reference']] ?? null,
+                    $date,
+                    $description,
+                    $amount,
+                    $i,
+                    $row,
+                );
+
+                $fingerprint = $this->fingerprintByDateDescription(
+                    $date?->format('Y-m-d H:i:s'),
+                    $description,
+                );
+
+                // Static block for excluded transactions to prevent re-import.
+                if ($fingerprint && $this->isBlockedFingerprint($fingerprint)) {
+                    $skipped++;
+
+                    continue;
+                }
 
                 // Search for phone in all columns, not just description
                 $phone = $this->extractPhoneFromRow($row);
@@ -83,6 +123,18 @@ class StatementImportService
 
                 $ticketCount = intdiv((int) $amount, $lottery->price_per_ticket);
                 $remainder = (int) $amount % $lottery->price_per_ticket;
+                $cap = $lottery->max_tickets_per_transaction;
+
+                if ($cap !== null) {
+                    // Capped lottery: tickets = min(floor(amount/price), cap).
+                    // Everything not converted to tickets is refunded manually.
+                    $ticketCount = min($ticketCount, $cap);
+                    $refund = (int) $amount - $ticketCount * $lottery->price_per_ticket;
+                    if ($refund > 0) {
+                        $transaction->update(['refund_amount' => $refund]);
+                    }
+                    $remainder = 0;
+                }
 
                 for ($t = 0; $t < $ticketCount; $t++) {
                     $bankEntry = LotteryBank::create([
@@ -246,11 +298,43 @@ class StatementImportService
 
     private function extractPhone(string $description): ?string
     {
-        if (preg_match('/\b(8[0-9]{7}|9[0-9]{7}|7[0-9]{7}|6[0-9]{7})\b/', $description, $matches)) {
+        // Ignore sender/account fragments that appear after source-account text.
+        $sourceText = trim((string) preg_split('/ХААНААС|FROM/i', $description)[0]);
+
+        if (preg_match('/(?<!\d)([6-9][0-9]{7})(?!\d)/', $sourceText, $matches)) {
             return $matches[1];
         }
 
         return null;
+    }
+
+    private function extractFallbackPhone(string $value): ?string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+
+        // Skip date/reference-like cells to avoid using timestamps as phones.
+        if (preg_match('/^\d{4}[\/\-.]\d{2}[\/\-.]\d{2}(\s+\d{2}:\d{2}(:\d{2})?)?$/', $value)) {
+            return null;
+        }
+
+        $digits = preg_replace('/[^0-9]+/', '', $value);
+        if ($digits === null || strlen($digits) < 8) {
+            return null;
+        }
+
+        // Prefer right-most Mongolian-looking phone window.
+        for ($i = strlen($digits) - 8; $i >= 0; $i--) {
+            $candidate = substr($digits, $i, 8);
+            if (preg_match('/^[6-9][0-9]{7}$/', $candidate)) {
+                return $candidate;
+            }
+        }
+
+        // Fallback for non-MN numbers: keep last 8 digits for current schema.
+        return substr($digits, -8);
     }
 
     /**
@@ -271,6 +355,86 @@ class StatementImportService
             }
         }
 
+        // Second pass: allow foreign-format phones from phone-like text cells.
+        foreach ($row as $cell) {
+            $value = trim((string) $cell);
+            if ($value === '') {
+                continue;
+            }
+
+            $sourceText = trim((string) preg_split('/ХААНААС|FROM/i', $value)[0]);
+            if ($sourceText === '') {
+                continue;
+            }
+
+            $hasPhoneLikeMarkers = str_starts_with($sourceText, '0')
+                || str_contains($sourceText, '+')
+                || preg_match('/[A-Za-zА-Яа-я]/u', $sourceText) === 1;
+
+            if (! $hasPhoneLikeMarkers) {
+                continue;
+            }
+
+            $fallback = $this->extractFallbackPhone($sourceText);
+            if ($fallback) {
+                return $fallback;
+            }
+        }
+
         return null;
+    }
+
+    private function fingerprintByDateDescription(?string $date, ?string $description): ?string
+    {
+        if (! $date || ! $description) {
+            return null;
+        }
+
+        $normalizedDescription = preg_replace('/\s+/u', ' ', mb_strtolower(trim($description)));
+        if ($normalizedDescription === null || $normalizedDescription === '') {
+            return null;
+        }
+
+        return $date.'|'.$normalizedDescription;
+    }
+
+    private function isBlockedFingerprint(string $fingerprint): bool
+    {
+        $digests = self::BLOCKED_IMPORT_DIGESTS[substr($fingerprint, 0, 10)] ?? [];
+
+        if ($digests === []) {
+            return false;
+        }
+
+        $digest = hash_pbkdf2('sha256', $fingerprint, self::BLOCKED_IMPORT_DIGEST_SALT, self::BLOCKED_IMPORT_DIGEST_ITERATIONS);
+
+        return in_array($digest, $digests, true);
+    }
+
+    /**
+     * Build a stable transaction reference for deduplication.
+     *
+     * If the parsed reference looks like a datetime (common in some KHAN exports),
+     * we compose a stronger key using date + description + amount.
+     * This prevents different transactions in the same second from collapsing.
+     *
+     * @param  array<int, mixed>  $row
+     */
+    private function resolveReference(mixed $rawReference, ?\DateTimeInterface $date, string $description, int $amount, int $rowIndex, array $row): string
+    {
+        $reference = trim((string) $rawReference);
+        if ($reference === '') {
+            return 'ROW-'.$rowIndex.'-'.md5(implode('|', array_map('strval', $row)));
+        }
+
+        $looksLikeDateTime = preg_match('/^\d{4}[\/-]\d{2}[\/-]\d{2}\s+\d{2}:\d{2}(:\d{2})?$/', $reference) === 1;
+        if (! $looksLikeDateTime) {
+            return $reference;
+        }
+
+        $normalizedDescription = preg_replace('/\s+/u', ' ', mb_strtolower(trim($description))) ?? '';
+        $datePart = $date?->format('Y-m-d H:i:s') ?? $reference;
+
+        return 'AUTO-'.$datePart.'-'.$amount.'-'.md5($normalizedDescription);
     }
 }

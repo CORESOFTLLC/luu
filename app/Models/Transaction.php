@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['lottery_id', 'bank_reference', 'phone', 'amount', 'description', 'transacted_at', 'is_excluded'])]
+#[Fillable(['lottery_id', 'bank_reference', 'phone', 'amount', 'refund_amount', 'description', 'transacted_at', 'is_excluded'])]
 class Transaction extends Model
 {
     /** @use HasFactory<TransactionFactory> */
@@ -23,6 +23,7 @@ class Transaction extends Model
         return [
             'transacted_at' => 'datetime',
             'amount' => 'integer',
+            'refund_amount' => 'integer',
             'is_excluded' => 'boolean',
         ];
     }

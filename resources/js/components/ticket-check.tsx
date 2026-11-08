@@ -1,21 +1,8 @@
-import { AlertTriangle, ArrowDownCircle, CalendarDays, Phone, Search, Ticket } from 'lucide-react';
+import { ArrowDownCircle, CalendarDays, Phone, Search, Ticket } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { LotteryTicketData } from '@/types';
-
-type RemainderEntry = {
-    id: number;
-    phone: string;
-    amount: number;
-    transaction_id: number;
-    transaction?: {
-        id: number;
-        amount: number;
-        description: string;
-        transacted_at: string;
-    };
-};
 
 type TransactionEntry = {
     id: number;
@@ -33,14 +20,12 @@ type Props = {
 export default function TicketCheck({ lotteryId, lotteryImage, pricePerTicket }: Props) {
     const [phone, setPhone] = useState('');
     const [tickets, setTickets] = useState<LotteryTicketData[]>([]);
-    const [remainders, setRemainders] = useState<RemainderEntry[]>([]);
     const [transactions, setTransactions] = useState<TransactionEntry[]>([]);
-    const [remainderTotal, setRemainderTotal] = useState(0);
     const [searched, setSearched] = useState(false);
     const [loading, setLoading] = useState(false);
 
     const handleSearch = async () => {
-        if (!/^[6-9]\d{7}$/.test(phone)) {
+        if (!/^\d{8}$/.test(phone)) {
             return;
         }
 
@@ -60,9 +45,7 @@ export default function TicketCheck({ lotteryId, lotteryImage, pricePerTicket }:
 
             const data = await response.json();
             setTickets(data.tickets);
-            setRemainders(data.remainders ?? []);
             setTransactions(data.transactions ?? []);
-            setRemainderTotal(data.remainder_total ?? 0);
             setSearched(true);
         } finally {
             setLoading(false);
@@ -99,7 +82,7 @@ export default function TicketCheck({ lotteryId, lotteryImage, pricePerTicket }:
                 onClick={handleSearch}
                 className="w-full h-12 text-base font-bold"
                 size="lg"
-                disabled={loading || !/^[6-9]\d{7}$/.test(phone)}
+                disabled={loading || !/^\d{8}$/.test(phone)}
             >
                 <Search className="mr-2 h-5 w-5" />
                 {loading ? 'Хайж байна...' : 'Сугалаа хайх'}
@@ -107,7 +90,7 @@ export default function TicketCheck({ lotteryId, lotteryImage, pricePerTicket }:
 
             {searched && (
                 <div className="space-y-3">
-                    {tickets.length === 0 && remainders.length === 0 && transactions.length === 0 ? (
+                    {tickets.length === 0 && transactions.length === 0 ? (
                         <p className="text-center text-sm text-muted-foreground">
                             Сугалаа олдсонгүй.
                         </p>
@@ -131,16 +114,24 @@ export default function TicketCheck({ lotteryId, lotteryImage, pricePerTicket }:
                                         <div className="bg-gradient-to-r from-primary to-primary/80 px-4 py-3 flex items-center justify-between">
                                             <div className="flex items-center gap-2">
                                                 <Ticket className="h-5 w-5 text-primary-foreground" />
-                                                <span className="text-sm text-primary-foreground/80">
-                                                    Таны сугалааны дугаар.
-                                                </span>
-                                                <span className="text-lg font-extrabold text-primary-foreground">
-                                                    #{ticket.ticket_number}
-                                                </span>
+                                                {ticket.ticket_number ? (
+                                                    <>
+                                                        <span className="text-sm text-primary-foreground/80">
+                                                            Таны сугалааны дугаар.
+                                                        </span>
+                                                        <span className="text-lg font-extrabold text-primary-foreground">
+                                                            #{ticket.ticket_number}
+                                                        </span>
+                                                    </>
+                                                ) : (
+                                                    <span className="text-lg font-extrabold text-primary-foreground">
+                                                        {ticket.phone}
+                                                    </span>
+                                                )}
                                             </div>
                                             {ticket.transaction && (
                                                 <span className="rounded-full bg-white/20 px-3 py-0.5 text-sm font-bold text-primary-foreground">
-                                                    {formatAmount(ticket.transaction.amount)}
+                                                    {formatAmount(pricePerTicket)}
                                                 </span>
                                             )}
                                         </div>
@@ -148,11 +139,11 @@ export default function TicketCheck({ lotteryId, lotteryImage, pricePerTicket }:
                                         {/* Ticket body */}
                                         <div className="flex bg-card/80 backdrop-blur-sm">
                                             {lotteryImage && (
-                                                <div className="w-1/3 flex-shrink-0">
+                                                <div className="relative w-1/3 flex-shrink-0 overflow-hidden">
                                                     <img
                                                         src={`/storage/${lotteryImage}`}
                                                         alt="Сугалаа"
-                                                        className="h-full w-full object-cover"
+                                                        className="absolute inset-0 h-full w-full object-cover object-center"
                                                     />
                                                 </div>
                                             )}
@@ -192,73 +183,6 @@ export default function TicketCheck({ lotteryId, lotteryImage, pricePerTicket }:
                             </div>
                         </>
                     )}
-
-                    {/* Ghost cards for remainders */}
-                    {remainders.map((entry) => (
-                        <div
-                            key={`remainder-${entry.id}`}
-                            className="relative overflow-hidden rounded-xl border-2 border-dashed border-yellow-400/60 opacity-60"
-                        >
-                            {/* Ghost header */}
-                            <div className="bg-gradient-to-r from-yellow-500/80 to-yellow-600/60 px-4 py-3 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <Ticket className="h-5 w-5 text-white/70" />
-                                    <span className="text-sm text-white/70">
-                                        Сугалаа үүсээгүй
-                                    </span>
-                                </div>
-                                <span className="rounded-full bg-white/20 px-3 py-0.5 text-sm font-bold text-white">
-                                    {formatAmount(entry.amount)}
-                                </span>
-                            </div>
-
-                            {/* Ghost body */}
-                            <div className="flex bg-yellow-50/50 dark:bg-yellow-950/20">
-                                {lotteryImage && (
-                                    <div className="w-1/3 flex-shrink-0 grayscale opacity-40">
-                                        <img
-                                            src={`/storage/${lotteryImage}`}
-                                            alt="Сугалаа"
-                                            className="h-full w-full object-cover"
-                                        />
-                                    </div>
-                                )}
-                                <div className="flex-1 px-4 py-3 space-y-2">
-                                    <div className="flex items-center gap-2 text-sm">
-                                        <Phone className="h-3.5 w-3.5 text-muted-foreground" />
-                                        <span className="text-muted-foreground">Утас:</span>
-                                        <span className="font-semibold">{entry.phone}</span>
-                                    </div>
-
-                                    {entry.transaction?.transacted_at && (
-                                        <div className="flex items-center gap-2 text-sm">
-                                            <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
-                                            <span className="text-muted-foreground">Огноо:</span>
-                                            <span className="font-semibold">
-                                                {formatDate(entry.transaction.transacted_at)}
-                                            </span>
-                                        </div>
-                                    )}
-
-                                    <div className="flex items-start gap-1.5 rounded-md bg-yellow-100 dark:bg-yellow-950/40 px-3 py-2">
-                                        <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-yellow-600 dark:text-yellow-400" />
-                                        <div className="space-y-1">
-                                            <p className="text-sm font-bold text-yellow-800 dark:text-yellow-300">
-                                                {formatAmount(pricePerTicket - entry.amount)} дутуу
-                                            </p>
-                                            <p className="text-xs text-yellow-700 dark:text-yellow-300">
-                                                Та {formatAmount(pricePerTicket - entry.amount)} нэмж шилжүүлбэл сугалаа үүснэ.
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Decorative ticket perforation */}
-                            <div className="absolute top-[52px] -left-2 h-4 w-4 rounded-full bg-background" />
-                            <div className="absolute top-[52px] -right-2 h-4 w-4 rounded-full bg-background" />
-                        </div>
-                    ))}
 
                     {/* Transactions list */}
                     {transactions.length > 0 && (
