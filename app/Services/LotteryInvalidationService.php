@@ -296,9 +296,12 @@ class LotteryInvalidationService
         return CarbonImmutable::now($this->timezone())->toDateString();
     }
 
+    /**
+     * The default also covers a config cache built before config/lottery.php existed.
+     */
     public function timezone(): string
     {
-        return config('lottery.bank_timezone');
+        return config()->string('lottery.bank_timezone', 'Asia/Ulaanbaatar');
     }
 
     /**

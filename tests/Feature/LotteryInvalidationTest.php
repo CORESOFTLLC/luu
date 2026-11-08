@@ -669,6 +669,21 @@ test('today is the Ulaanbaatar calendar day', function () {
         ->assertInertia(fn (Assert $page) => $page->where('invalidation.today', '2026-11-20'));
 });
 
+test('a config cache built before the lottery config existed keeps Ulaanbaatar days and stays closed', function () {
+    config(['lottery' => null]);
+    $this->travelTo(CarbonImmutable::parse('2026-11-19 17:30:00', 'UTC'));
+
+    expect(app(LotteryInvalidationService::class)->today())->toBe('2026-11-20');
+
+    previewWindow($this->lottery, '2026-11-10', '2026-11-15')->assertForbidden();
+
+    $this->get("/admin/lotteries/{$this->lottery->id}/import")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('invalidation.can_manage', false)
+            ->where('invalidation.today', '2026-11-20'));
+});
+
 test('deleting a lottery also removes its invalidation history', function () {
     importStatement($this->lottery, windowRows());
     closeWindow($this->lottery, '2026-11-10', '2026-11-15');

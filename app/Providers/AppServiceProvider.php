@@ -33,7 +33,7 @@ class AppServiceProvider extends ServiceProvider
     {
         Gate::define('manage-lottery-invalidations', fn (User $user): bool => in_array(
             $user->id,
-            config('lottery.invalidation_admin_ids'),
+            config()->array('lottery.invalidation_admin_ids', []),
             true,
         ));
     }
