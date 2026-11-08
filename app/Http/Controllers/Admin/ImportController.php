@@ -8,8 +8,11 @@ use App\Models\LotteryBank;
 use App\Models\LotteryTicket;
 use App\Models\Transaction;
 use App\Services\StatementImportService;
+use Carbon\Carbon;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -135,7 +138,7 @@ class ImportController extends Controller
      * Server-rendered A4 print sheet: 3 columns x 13 rows, one cell per ticket,
      * phone repeated once per ticket, in import order.
      */
-    public function printTickets(Request $request, Lottery $lottery): \Illuminate\Contracts\View\View
+    public function printTickets(Request $request, Lottery $lottery): View
     {
         // Optional range on the bank statement transfer datetime (transactions.transacted_at).
         $parse = function (?string $v) {
@@ -143,7 +146,7 @@ class ImportController extends Controller
                 return null;
             }
             try {
-                return \Carbon\Carbon::parse($v);
+                return Carbon::parse($v);
             } catch (\Throwable) {
                 return null;
             }
@@ -151,7 +154,7 @@ class ImportController extends Controller
         $from = $parse($request->query('from'));
         $to = $parse($request->query('to'));
 
-        $tickets = \Illuminate\Support\Facades\DB::table('lottery_tickets')
+        $tickets = DB::table('lottery_tickets')
             ->join('transactions', 'transactions.id', '=', 'lottery_tickets.transaction_id')
             ->where('lottery_tickets.lottery_id', $lottery->id)
             ->when($from, fn ($q) => $q->where('transactions.transacted_at', '>=', $from))
@@ -161,7 +164,7 @@ class ImportController extends Controller
             ->get(['lottery_tickets.id', 'lottery_tickets.ticket_number', 'lottery_tickets.phone']);
 
         // Statement totals for the same lottery and range.
-        $stats = \Illuminate\Support\Facades\DB::table('transactions')
+        $stats = DB::table('transactions')
             ->where('lottery_id', $lottery->id)
             ->when($from, fn ($q) => $q->where('transacted_at', '>=', $from))
             ->when($to, fn ($q) => $q->where('transacted_at', '<=', $to))
