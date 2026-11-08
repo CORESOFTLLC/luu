@@ -547,6 +547,27 @@ test('a combined remainder ticket that spans the window boundary is invalidated 
         ->and(LotteryBank::query()->where('transaction_id', $inside->id)->sole()->ticket_number)->toBeNull();
 });
 
+test('the per-transfer cap and refunds work as before and invalidation keeps the refund records', function () {
+    $this->lottery->update(['max_tickets_per_transaction' => 15]);
+
+    importStatement($this->lottery, [
+        ['2026-11-12 10:00:00', 245000, '99000201 сугалаа'],
+        ['2026-11-12 11:00:00', 20000, '99000201 сугалаа'],
+        ['2026-11-16 09:00:00', 30000, '99000202 сугалаа'],
+    ]);
+
+    $refunds = fn () => $this->lottery->transactions()->orderBy('transacted_at')->pluck('refund_amount')->all();
+
+    expect($this->lottery->tickets()->count())->toBe(18)
+        ->and($refunds())->toBe([20000, 5000, 0])
+        ->and($this->lottery->bankEntries()->whereNull('ticket_number')->count())->toBe(0);
+
+    closeWindow($this->lottery, '2026-11-10', '2026-11-15')->assertRedirect();
+
+    expect(ticketPhones($this->lottery))->toBe(['99000202', '99000202'])
+        ->and($refunds())->toBe([20000, 5000, 0]);
+});
+
 test('ticket numbers of invalidated tickets are never issued again', function () {
     importStatement($this->lottery, windowRows());
     closeWindow($this->lottery, '2026-11-01', '2026-11-19');
