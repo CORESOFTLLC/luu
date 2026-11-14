@@ -1,6 +1,6 @@
-import { Head, Link, router, usePage } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import { ArrowUpDown, ArrowUp, ArrowDown, Search, ChevronLeft, ChevronRight } from 'lucide-react';
-import { useMemo, useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import Heading from '@/components/heading';
 import { Button } from '@/components/ui/button';
 import {
@@ -24,6 +24,7 @@ type Lottery = {
     id: number;
     name: string;
     price_per_ticket: number;
+    show_ticket_numbers: boolean;
 };
 
 type BankEntry = {
@@ -58,14 +59,16 @@ type Props = {
     filters: {
         search: string;
         status: string;
+        sort_by: string;
+        sort_dir: 'asc' | 'desc';
     };
 };
 
 export default function AdminLotteryBank({ lottery, bankEntries, filters }: Props) {
-    const [sortKey, setSortKey] = useState<'ticket_number' | 'phone' | 'amount' | null>(null);
-    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [searchValue, setSearchValue] = useState(filters.search ?? '');
     const [statusFilter, setStatusFilter] = useState(filters.status ?? '');
+    const [sortBy, setSortBy] = useState(filters.sort_by ?? 'ticket_number');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>(filters.sort_dir ?? 'asc');
     const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
 
     const navigate = useCallback((params: Record<string, string | undefined>) => {
@@ -80,40 +83,39 @@ export default function AdminLotteryBank({ lottery, bankEntries, filters }: Prop
         setSearchValue(value);
         clearTimeout(searchTimeout.current);
         searchTimeout.current = setTimeout(() => {
-            navigate({ search: value || undefined, status: statusFilter || undefined });
+            navigate({
+                search: value || undefined,
+                status: statusFilter || undefined,
+                sort_by: sortBy,
+                sort_dir: sortDir,
+            });
         }, 300);
-    }, [navigate, statusFilter]);
+    }, [navigate, statusFilter, sortBy, sortDir]);
 
     const handleStatusFilter = (value: string) => {
         setStatusFilter(value);
-        navigate({ search: searchValue || undefined, status: value || undefined });
-    };
-
-    const toggleSort = (key: 'ticket_number' | 'phone' | 'amount') => {
-        if (sortKey === key) {
-            setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-        } else {
-            setSortKey(key);
-            setSortDir('asc');
-        }
-    };
-
-    const sortedEntries = useMemo(() => {
-        if (!sortKey) return bankEntries.data;
-        return [...bankEntries.data].sort((a, b) => {
-            let aVal = a[sortKey];
-            let bVal = b[sortKey];
-            if (aVal === null || aVal === undefined) aVal = sortDir === 'asc' ? Infinity : -Infinity;
-            if (bVal === null || bVal === undefined) bVal = sortDir === 'asc' ? Infinity : -Infinity;
-            if (typeof aVal === 'string') {
-                return sortDir === 'asc' ? aVal.localeCompare(bVal as string) : (bVal as string).localeCompare(aVal);
-            }
-            return sortDir === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+        navigate({
+            search: searchValue || undefined,
+            status: value || undefined,
+            sort_by: sortBy,
+            sort_dir: sortDir,
         });
-    }, [bankEntries.data, sortKey, sortDir]);
+    };
+
+    const handleSort = (column: string) => {
+        const nextDir: 'asc' | 'desc' = sortBy === column && sortDir === 'asc' ? 'desc' : 'asc';
+        setSortBy(column);
+        setSortDir(nextDir);
+        navigate({
+            search: searchValue || undefined,
+            status: statusFilter || undefined,
+            sort_by: column,
+            sort_dir: nextDir,
+        });
+    };
 
     const SortIcon = ({ column }: { column: string }) => {
-        if (sortKey !== column) return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-40" />;
+        if (sortBy !== column) return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-40" />;
         return sortDir === 'asc' ? <ArrowUp className="ml-1 inline h-3 w-3" /> : <ArrowDown className="ml-1 inline h-3 w-3" />;
     };
 
@@ -222,22 +224,28 @@ export default function AdminLotteryBank({ lottery, bankEntries, filters }: Prop
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('ticket_number')}>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => handleSort('ticket_number')}>
                                         Сугалаа <SortIcon column="ticket_number" />
                                     </TableHead>
-                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('phone')}>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => handleSort('phone')}>
                                         Утас <SortIcon column="phone" />
                                     </TableHead>
-                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('amount')}>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => handleSort('amount')}>
                                         Дүн <SortIcon column="amount" />
                                     </TableHead>
-                                    <TableHead>Гүйлгээний утга</TableHead>
-                                    <TableHead>Огноо</TableHead>
-                                    <TableHead>Төлөв</TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => handleSort('description')}>
+                                        Гүйлгээний утга <SortIcon column="description" />
+                                    </TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => handleSort('transacted_at')}>
+                                        Огноо <SortIcon column="transacted_at" />
+                                    </TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => handleSort('is_excluded')}>
+                                        Төлөв <SortIcon column="is_excluded" />
+                                    </TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {sortedEntries.map((entry) => (
+                                {bankEntries.data.map((entry) => (
                                     <TableRow
                                         key={entry.id}
                                         className={entry.is_excluded ? 'opacity-40' : !entry.ticket_number ? 'bg-yellow-50 dark:bg-yellow-950/20' : ''}
@@ -246,7 +254,7 @@ export default function AdminLotteryBank({ lottery, bankEntries, filters }: Prop
                                             {entry.is_excluded ? (
                                                 <span className="text-muted-foreground line-through">—</span>
                                             ) : entry.ticket_number ? (
-                                                <span className="text-primary">#{entry.ticket_number}</span>
+                                                <span className="text-primary">{lottery.show_ticket_numbers ? `#${entry.ticket_number}` : 'Сугалаа'}</span>
                                             ) : (
                                                 <span className="text-muted-foreground">—</span>
                                             )}

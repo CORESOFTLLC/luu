@@ -41,10 +41,17 @@ class LotteryController extends Controller
             'bank_name' => ['nullable', 'string', 'max:255'],
             'location' => ['nullable', 'string', 'max:255'],
             'price_per_ticket' => ['required', 'integer', 'min:1000'],
-            'total_tickets' => ['required', 'integer', 'min:1'],
+            'max_tickets_per_transaction' => ['nullable', 'integer', 'min:1'],
+            'total_tickets' => ['exclude_if:is_unlimited,1', 'required', 'integer', 'min:1'],
             'starts_at' => ['required', 'date'],
             'draws_at' => ['required', 'date', 'after:starts_at'],
         ]);
+
+        $validated['show_ticket_numbers'] = $request->boolean('show_ticket_numbers');
+
+        if ($request->boolean('is_unlimited')) {
+            $validated['total_tickets'] = null;
+        }
 
         $validated['slug'] = Str::slug($validated['name']).'-'.Str::random(6);
 
@@ -78,10 +85,17 @@ class LotteryController extends Controller
             'bank_name' => ['nullable', 'string', 'max:255'],
             'location' => ['nullable', 'string', 'max:255'],
             'price_per_ticket' => ['required', 'integer', 'min:1000'],
-            'total_tickets' => ['required', 'integer', 'min:1'],
+            'max_tickets_per_transaction' => ['nullable', 'integer', 'min:1'],
+            'total_tickets' => ['exclude_if:is_unlimited,1', 'required', 'integer', 'min:1'],
             'starts_at' => ['required', 'date'],
             'draws_at' => ['required', 'date', 'after:starts_at'],
         ]);
+
+        $validated['show_ticket_numbers'] = $request->boolean('show_ticket_numbers');
+
+        if ($request->boolean('is_unlimited')) {
+            $validated['total_tickets'] = null;
+        }
 
         if ($request->hasFile('image')) {
             $validated['image'] = $request->file('image')->store('lotteries', 'public');
@@ -133,5 +147,29 @@ class LotteryController extends Controller
         Inertia::flash('toast', ['type' => 'success', 'message' => 'Зураг устгагдлаа.']);
 
         return back();
+    }
+
+    public function destroy(Request $request, Lottery $lottery): RedirectResponse
+    {
+        $request->validate([
+            'confirm' => ['required', 'string', 'in:батлах'],
+        ], [
+            'confirm.required' => 'Устгахын тулд "батлах" гэж бичнэ үү.',
+            'confirm.in' => 'Устгахын тулд "батлах" гэж яг бичнэ үү.',
+        ]);
+
+        $files = $lottery->images()->pluck('path')->push($lottery->image)->filter()->values()->all();
+        $name = $lottery->name;
+
+        // transactions, lottery_tickets, lottery_banks, lottery_images are removed by FK cascade.
+        \Illuminate\Support\Facades\DB::transaction(function () use ($lottery) {
+            $lottery->delete();
+        });
+
+        Storage::disk('public')->delete($files);
+
+        Inertia::flash('toast', ['type' => 'success', 'message' => $name.' сугалаа устгагдлаа.']);
+
+        return redirect('/admin/lotteries');
     }
 }

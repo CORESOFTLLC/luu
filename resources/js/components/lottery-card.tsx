@@ -39,9 +39,6 @@ export default function LotteryCard({ lottery, onParticipate }: Props) {
                             Дууссагүй байгаа
                         </span>
                     )}
-                    <span className="rounded bg-black/60 px-2 py-0.5 text-xs font-medium text-white">
-                        Дүүргэлт: {lottery.completion}%
-                    </span>
                 </div>
             </div>
 
